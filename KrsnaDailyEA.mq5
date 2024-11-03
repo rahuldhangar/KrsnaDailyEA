@@ -9,7 +9,16 @@
 //-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-
 #property strict
 
-// Input parameters
+// Include the necessary trade library
+#include <Trade\Trade.mqh>
+
+//+------------------------------------------------------------------+
+//| Expert input parameters                                          |
+//+------------------------------------------------------------------+
+input double LotSize = 0.1;  // Lot size, default is 0.1 lot
+input double tpMultiplier = 1.25;  // Risk : Reward ratio
+input double slAboveHighOrBelowLow = 6.0;  // Place SL above high / below low 
+
 input int StartHour = 7;  // Starting hour of the custom daily candle
 input int CandleBodyWidth = 3;  // Width of the candle body
 input int HighLowLineWidth = 1;  // Width of the high-low line
@@ -30,9 +39,25 @@ datetime lastUpdateTime = 0;
 // Chart ID
 long chartID;
 
+
+// Variables to track custom candle formation and trading
+bool newCandleFormed = false;
+datetime newCandleTime = 0;
+double newCandleHigh = 0;
+double newCandleLow = 0;
+double prevCandleHigh = 0;
+double prevCandleLow = 0;
+bool orderPlaced = false;  // Flag to track if an order has been placed
+datetime lastOrderDay = 0;  // Track the day when the last order was placed
+
 // Get the timeframe of the chart
 int chartPeriod = ChartPeriod(0);
 
+enum ENUM_ORDER_SELECT
+  {
+   SELECT_BY_POS    = 0, // Index in the list of orders
+   SELECT_BY_TICKET = 1  // Order ticket
+  };
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
@@ -103,12 +128,116 @@ void OnTick()
    datetime currentTime = TimeCurrent();
    if (currentTime - lastUpdateTime >= 3600) //update custom candles every hour
      {
+      //Print("Updating custom daily candles at: ", TimeToString(currentTime, TIME_DATE | TIME_MINUTES));
       //printf(lastUpdateTime);  
       // Recalculate the custom daily candles
       CalculateCustomDailyCandles();
       lastUpdateTime = currentTime;
      }
+     // Check if one hour has passed since the new custom candle was formed
+   //if (newCandleFormed && (currentTime - newCandleTime >= 3600) && !orderPlaced && !IsTradeActive() && !IsOrderPlacedToday())
+   if (!IsTradeActive() && !IsOrderPlacedToday())
+     {
+      int size = ArraySize(HighBuffer);
+      newCandleHigh = HighBuffer[size-2];
+      newCandleLow = LowBuffer[size-2];
+      prevCandleHigh = HighBuffer[size-3];
+      prevCandleLow = LowBuffer[size-3];
+      //Print("newCandleHigh: ", newCandleHigh, "\nprevCandleHigh: ", prevCandleHigh,"\nnewCandleLow: ", newCandleLow, "\nprevCandleLow: ", prevCandleLow);
+      // Check the conditions for placing a buy limit order
+      if (newCandleHigh > prevCandleHigh && newCandleLow > prevCandleLow)
+        {
+         // Calculate the 60% retracement level
+         double retracementLevel = newCandleLow + 0.6 * (newCandleHigh - newCandleLow);
+         double lastCustomLow = newCandleLow;
+         
+         // Place the buy limit order
+         PlaceBuyLimitOrder(retracementLevel, lastCustomLow);
+         orderPlaced = true;  // Set the flag to indicate that an order has been placed
+         lastOrderDay = currentTime;  // Update the day when the order was placed
+        }
+
+      // Reset the flag
+      newCandleFormed = false;
+     }
+   // Check if the order has been executed or canceled
+   CheckOrderStatus();
   }
+//+------------------------------------------------------------------+
+//| Function to check if there are any active trades                 |
+//+------------------------------------------------------------------+
+bool IsTradeActive()
+{
+   //Print("Inside IsTradeActive function : ", PositionSelect(_Symbol));
+    return PositionSelect(_Symbol);
+}
+//+------------------------------------------------------------------+
+//| Function to check if an order has been placed today              |
+//+------------------------------------------------------------------+
+bool IsOrderPlacedToday()
+  {
+   MqlDateTime currentDayStruct;
+   TimeToStruct(TimeCurrent(), currentDayStruct);
+
+   MqlDateTime lastOrderDayStruct;
+   TimeToStruct(lastOrderDay, lastOrderDayStruct);
+
+   //Print("Inside IsOrderPlacedToday function");
+   
+   if (currentDayStruct.year == lastOrderDayStruct.year &&
+       currentDayStruct.mon  == lastOrderDayStruct.mon  &&
+       currentDayStruct.day  == lastOrderDayStruct.day)
+     {
+      return true;  // Order has been placed today
+     }
+   //Print(": not placed\n");
+   return false;  // No order placed today
+  }
+//+------------------------------------------------------------------+
+//| Function to check the status of the orders                       |
+//+------------------------------------------------------------------+
+void CheckOrderStatus()
+{
+    int totalOrders = OrdersTotal();
+
+    for (int i = 0; i < totalOrders; i++)
+    {
+        // Get the order ticket at index i
+        ulong ticket = OrderGetTicket(i);
+
+        // Select the order by ticket
+        if (OrderSelect(ticket))
+        {
+            // Get the order symbol
+            string symbol = OrderGetString(ORDER_SYMBOL);
+
+            // Check if the symbol matches
+            if (symbol == _Symbol)
+            {
+                // Get the order type
+                long orderType = OrderGetInteger(ORDER_TYPE);
+
+                // Check if it's a Buy Limit order
+                if (orderType == ORDER_TYPE_BUY_LIMIT)
+                {
+                    // Get the order state
+                    long orderState = OrderGetInteger(ORDER_STATE);
+
+                    // Check if the order has been filled or canceled
+                    if (orderState == ORDER_STATE_FILLED || orderState == ORDER_STATE_CANCELED)
+                    {
+                        orderPlaced = false;  // Reset the flag
+                    }
+                }
+            }
+        }
+        else
+        {
+            Print("Failed to select order with ticket: ", ticket, ". Error: ", GetLastError());
+        }
+    }
+}
+
 //+------------------------------------------------------------------+
 //| Function to calculate custom daily candles                       |
 //+------------------------------------------------------------------+
@@ -164,9 +293,16 @@ void CalculateCustomDailyCandles()
             LowBuffer[size] = lowPrice;
             CloseBuffer[size] = closePrice;
 
+            // Update previous high and low
+            
+            if (size > 1){
+               prevHigh = HighBuffer[size-1];// - HighBuffer[index - 2];
+               prevLow = LowBuffer[size-1];// - LowBuffer[index - 2];
+            }
             // Plot the candle
-            PlotCandle(size, time, openPrice, highPrice, lowPrice, closePrice);
-            //Print(size);
+            PlotCandle(size, time, openPrice, highPrice, lowPrice, closePrice, prevHigh, prevLow);
+            
+            //Print("\n-*-*-*-*-*-*-*-*   SIZE: ", size);
            }
 
          // Start a new candle
@@ -175,6 +311,12 @@ void CalculateCustomDailyCandles()
          lowPrice = low;
          closePrice = close;
          newCandle = false;
+         
+         // Set the new candle formation flag and time
+         newCandleFormed = true;
+         newCandleTime = time;
+         newCandleHigh = high;
+         newCandleLow = low;
         }
       else
         {
@@ -199,15 +341,21 @@ void CalculateCustomDailyCandles()
       LowBuffer[size] = lowPrice;
       CloseBuffer[size] = closePrice;
 
+      if (size > 1){
+         prevHigh = HighBuffer[size-1];// - HighBuffer[index - 2];
+         prevLow = LowBuffer[size-1];// - LowBuffer[index - 2];
+      }
+      
       // Plot the last candle
-      PlotCandle(size, startTime, openPrice, highPrice, lowPrice, closePrice);
-      Print("Number of candles: ",size);
+      PlotCandle(size, startTime, openPrice, highPrice, lowPrice, closePrice, prevHigh, prevLow);
+      //Print("Number of candles: ",size);
+      //Print("\n-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*   SIZE: ", size);
      }
   }
 //+------------------------------------------------------------------+
 //| Function to plot a candle                                        |
 //+------------------------------------------------------------------+
-void PlotCandle(int index, datetime time, double open, double high, double low, double close)
+void PlotCandle(int index, datetime time, double open, double high, double low, double close, double prevHigh, double prevLow)
   {
    string prefix = "Candle_" + IntegerToString(chartID) + "_" + IntegerToString(index) + "_";
    
@@ -217,9 +365,6 @@ void PlotCandle(int index, datetime time, double open, double high, double low, 
    double bodyBottom = MathMin(open, close);
    int bodyColor = (open > close) ? clrRed : clrGreen;
 
-   //Rahul      
-   double prevHigh = 0;
-   double prevLow = 0;
    if (index > 1){
       prevHigh = HighBuffer[index-1];// - HighBuffer[index - 2];
       prevLow = LowBuffer[index-1];// - LowBuffer[index - 2];
@@ -242,7 +387,7 @@ void PlotCandle(int index, datetime time, double open, double high, double low, 
          ObjectSetInteger(0, bodyName+"shade", OBJPROP_WIDTH, 1);
          ObjectSetInteger(0, bodyName+"shade",OBJPROP_FILL,true);
          ObjectSetInteger(0, bodyName+"shade",OBJPROP_BACK,true);
-         ObjectSetString(0, bodyName+"shade", OBJPROP_TOOLTIP, "Hello Dear");
+         ObjectSetString(0, bodyName+"shade", OBJPROP_TOOLTIP, tooltipText);
       }
       else {
          Print("Failed to create body object: ", bodyName+"shade");
@@ -307,4 +452,87 @@ void DisplayText(int index, datetime time, double high, double low, double prevH
    
    ObjectSetString(0, lowTextName, OBJPROP_TOOLTIP, lowTooltipText);
   }
+//+------------------------------------------------------------------+
+//| Function to place a buy limit order                              |
+//+------------------------------------------------------------------+
+void PlaceBuyLimitOrder(double price, double lastCustomLow)
+{
+    // Define pip size based on symbol's point
+    double pip = _Point;
+    Print("_Point: ", _Point);
+    // Calculate SL and TP
+    double sl_pips = slAboveHighOrBelowLow;  // how many pips below the low?
+    double tp_multiplier = tpMultiplier;
+    
+    double sl = NormalizeDouble(lastCustomLow - (sl_pips * pip), _Digits);
+    double tp = NormalizeDouble(price + (price - lastCustomLow) * tp_multiplier, _Digits);
+    
+   // Define the trade request
+   MqlTradeRequest request;
+   MqlTradeResult result;
+
+   ZeroMemory(request);
+   ZeroMemory(result);
+   
+   MqlDateTime oneDayLaterTime;
+   TimeToStruct(TimeCurrent(), oneDayLaterTime);
+   Print("oneDayLaterTime.day: ", oneDayLaterTime.day);
+   oneDayLaterTime.day  = oneDayLaterTime.day+1;
+   datetime oneDayLater = StructToTime(oneDayLaterTime);
+   Print("oneDayLater: ", oneDayLater);
+    request.action   = TRADE_ACTION_PENDING;            // Pending order
+    request.symbol   = _Symbol;                         // Current symbol
+    request.volume   = LotSize;                         // Lot size from input
+    request.price    = NormalizeDouble(price, _Digits);  // Buy limit price
+    request.sl       = sl;                              // Stop Loss
+    request.tp       = tp;                              // Take Profit
+    request.type     = ORDER_TYPE_BUY_LIMIT;            // Order type
+    request.type_filling = ORDER_FILLING_RETURN;        // Filling type (adjust as per broker)  ORDER_FILLING_FOK
+    request.type_time    = ORDER_TIME_SPECIFIED;        // Good Till Cancelled   ORDER_TIME_GTC
+    request.expiration   = oneDayLater;                 // Expire one day later
+    request.deviation    = 2;                           // Price deviation
+    request.comment      = "Buy Limit Order";           // Order comment
+    request.magic        = 123456;                      // Unique magic number
+    
+    // Send the trade request
+    if(OrderSend(request, result))
+    {
+        // Check the result retcode
+        if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
+        {
+            Print("Buy limit order placed successfully. Ticket: ", result.order);
+            orderPlaced = true;
+            lastOrderDay = TimeCurrent();
+        }
+        else
+        {
+            Print("OrderSend failed with retcode: ", result.retcode, " - ", ResultRetcodeDescription(result.retcode));
+            orderPlaced = false;
+        }
+    }
+    else
+    {
+        Print("OrderSend failed. Error: ", GetLastError());
+        orderPlaced = false;
+    }
+  }
+  
+//+------------------------------------------------------------------+
+//| Utility function to get retcode description                      |
+//+------------------------------------------------------------------+
+string ResultRetcodeDescription(uint retcode)
+{
+    switch(retcode)
+    {
+        case TRADE_RETCODE_REJECT:
+            return "Request rejected";
+        case TRADE_RETCODE_DONE:
+            return "Request completed";
+        case TRADE_RETCODE_PLACED:
+            return "Order placed";
+        // Add additional cases as needed
+        default:
+            return "Unknown result code";
+    }
+}
 //+------------------------------------------------------------------+
