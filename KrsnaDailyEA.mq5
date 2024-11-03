@@ -18,6 +18,7 @@
 input double LotSize = 0.1;  // Lot size, default is 0.1 lot
 input double tpMultiplier = 1.25;  // Risk : Reward ratio
 input double slAboveHighOrBelowLow = 6.0;  // Place SL above high / below low 
+input double retracementInPer = 0.5;  // Retracement level for placing order 
 
 input int StartHour = 7;  // Starting hour of the custom daily candle
 input int CandleBodyWidth = 3;  // Width of the candle body
@@ -139,20 +140,31 @@ void OnTick()
    if (!IsTradeActive() && !IsOrderPlacedToday())
      {
       int size = ArraySize(HighBuffer);
-      newCandleHigh = HighBuffer[size-2];
-      newCandleLow = LowBuffer[size-2];
-      prevCandleHigh = HighBuffer[size-3];
-      prevCandleLow = LowBuffer[size-3];
+      newCandleHigh = HighBuffer[size-1];
+      newCandleLow = LowBuffer[size-1];
+      prevCandleHigh = HighBuffer[size-2];
+      prevCandleLow = LowBuffer[size-2];
       //Print("newCandleHigh: ", newCandleHigh, "\nprevCandleHigh: ", prevCandleHigh,"\nnewCandleLow: ", newCandleLow, "\nprevCandleLow: ", prevCandleLow);
       // Check the conditions for placing a buy limit order
       if (newCandleHigh > prevCandleHigh && newCandleLow > prevCandleLow)
         {
-         // Calculate the 60% retracement level
-         double retracementLevel = newCandleLow + 0.6 * (newCandleHigh - newCandleLow);
+         // Calculate the retracement level
+         double retracementLevel = newCandleLow + retracementInPer * (newCandleHigh - newCandleLow);
          double lastCustomLow = newCandleLow;
          
          // Place the buy limit order
          PlaceBuyLimitOrder(retracementLevel, lastCustomLow);
+         orderPlaced = true;  // Set the flag to indicate that an order has been placed
+         lastOrderDay = currentTime;  // Update the day when the order was placed
+        }
+      if (newCandleLow > prevCandleLow && newCandleHigh > prevCandleHigh)
+        {
+         // Calculate the 60% retracement level
+         double retracementLevel = newCandleHigh - retracementInPer * (newCandleHigh - newCandleLow);
+         double lastCustomHigh = newCandleHigh;
+         
+         // Place the buy limit order
+         PlaceSellLimitOrder(retracementLevel, lastCustomHigh);
          orderPlaced = true;  // Set the flag to indicate that an order has been placed
          lastOrderDay = currentTime;  // Update the day when the order was placed
         }
@@ -517,6 +529,70 @@ void PlaceBuyLimitOrder(double price, double lastCustomLow)
     }
   }
   
+//+------------------------------------------------------------------+
+//| Function to place a sell limit order                              |
+//+------------------------------------------------------------------+
+void PlaceSellLimitOrder(double price, double lastCustomHigh)
+{
+    // Define pip size based on symbol's point
+    double pip = _Point;
+    Print("_Point: ", _Point);
+    // Calculate SL and TP
+    double sl_pips = slAboveHighOrBelowLow;  // how many pips below the low?
+    double tp_multiplier = tpMultiplier;
+    
+    double sl = NormalizeDouble(lastCustomHigh + (sl_pips * pip), _Digits);
+    double tp = NormalizeDouble((price - lastCustomHigh) * tp_multiplier + price, _Digits);
+    
+   // Define the trade request
+   MqlTradeRequest request;
+   MqlTradeResult result;
+
+   ZeroMemory(request);
+   ZeroMemory(result);
+   
+   MqlDateTime oneDayLaterTime;
+   TimeToStruct(TimeCurrent(), oneDayLaterTime);
+   Print("oneDayLaterTime.day: ", oneDayLaterTime.day);
+   oneDayLaterTime.day  = oneDayLaterTime.day+1;
+   datetime oneDayLater = StructToTime(oneDayLaterTime);
+   Print("oneDayLater: ", oneDayLater);
+    request.action   = TRADE_ACTION_PENDING;            // Pending order
+    request.symbol   = _Symbol;                         // Current symbol
+    request.volume   = LotSize;                         // Lot size from input
+    request.price    = NormalizeDouble(price, _Digits);  // Buy limit price
+    request.sl       = sl;                              // Stop Loss
+    request.tp       = tp;                              // Take Profit
+    request.type     = ORDER_TYPE_SELL_LIMIT;            // Order type
+    request.type_filling = ORDER_FILLING_RETURN;        // Filling type (adjust as per broker)  ORDER_FILLING_FOK
+    request.type_time    = ORDER_TIME_SPECIFIED;        // Good Till Cancelled   ORDER_TIME_GTC
+    request.expiration   = oneDayLater;                 // Expire one day later
+    request.deviation    = 2;                           // Price deviation
+    request.comment      = "Sell Limit Order";           // Order comment
+    request.magic        = 123456;                      // Unique magic number
+    
+    // Send the trade request
+    if(OrderSend(request, result))
+    {
+        // Check the result retcode
+        if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
+        {
+            Print("Sell limit order placed successfully. Ticket: ", result.order);
+            orderPlaced = true;
+            lastOrderDay = TimeCurrent();
+        }
+        else
+        {
+            Print("OrderSend failed with retcode: ", result.retcode, " - ", ResultRetcodeDescription(result.retcode));
+            orderPlaced = false;
+        }
+    }
+    else
+    {
+        Print("OrderSend failed. Error: ", GetLastError());
+        orderPlaced = false;
+    }
+  }
 //+------------------------------------------------------------------+
 //| Utility function to get retcode description                      |
 //+------------------------------------------------------------------+

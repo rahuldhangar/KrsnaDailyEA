@@ -23,13 +23,26 @@ The Krsna-Off Expert Advisor (EA) is a custom trading tool designed for the Meta
      - If the high of the current custom candle is higher than the high of the previous custom candle.
      - If the low of the current custom candle is higher than the low of the previous custom candle.
      - The buy limit order is placed at the 60% retracement level of the current custom candle.
-   - The buy limit order includes a stop loss and take profit based on user-defined multipliers.
-   - The order is set to expire one day later.
+   - Places a sell limit order based on specific conditions:
+     - If the low of the current custom candle is higher than the low of the previous custom candle.
+     - If the high of the current custom candle is higher than the high of the previous custom candle.
+     - The sell limit order is placed at the 60% retracement level of the current custom candle.
+   - The buy and sell limit orders include a stop loss and take profit based on user-defined multipliers.
+   - The orders are set to expire one day later.
+
+5. **Order Status Check**:
+   - Checks if there are any active trades.
+   - Checks if an order has been placed today.
+   - Checks the status of the orders and resets the flag if the order has been filled or canceled.
+
+6. **Utility Function**:
+   - Provides a utility function to get the description of the result code from the trade request.
 
 ## Input Parameters
 - `LotSize`: Lot size, default is 0.1 lot.
 - `tpMultiplier`: Risk : Reward ratio.
 - `slAboveHighOrBelowLow`: Place SL above high / below low.
+- `retracementInPer`: Retracement level for placing order.
 - `StartHour`: Starting hour of the custom daily candle.
 - `CandleBodyWidth`: Width of the candle body.
 - `HighLowLineWidth`: Width of the high-low line.
@@ -52,6 +65,13 @@ The Krsna-Off Expert Advisor (EA) is a custom trading tool designed for the Meta
    - Tooltips and text displaying the differences between the highs and lows of consecutive candles will be shown on the chart.
 
 4. **Automated Trading**:
-   - The EA will place a buy limit order based on the specified conditions.
-   - The order will include a stop loss and take profit based on user-defined multipliers.
-   - The order will expire one day later.
+   - The EA will place buy and sell limit orders based on the specified conditions.
+   - The orders will include a stop loss and take profit based on user-defined multipliers.
+   - The orders will expire one day later.
+
+5. **Order Status Check**:
+   - The EA will check if there are any active trades and if an order has been placed today.
+   - It will also check the status of the orders and reset the flag if the order has been filled or canceled.
+
+6. **Utility Function**:
+   - The EA includes a utility function to get the description of the result code from the trade request.
